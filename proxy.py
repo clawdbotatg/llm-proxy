@@ -236,14 +236,17 @@ class ProxyHandler(BaseHTTPRequestHandler):
             f"${cost:.4f} {elapsed:.1f}s -> {status_code}"
         )
 
-        self.send_response(status_code)
-        for key in ("Content-Type",):
-            val = resp_headers.get(key)
-            if val:
-                self.send_header(key, val)
-        self.send_header("Content-Length", str(len(resp_body)))
-        self.end_headers()
-        self.wfile.write(resp_body)
+        try:
+            self.send_response(status_code)
+            for key in ("Content-Type",):
+                val = resp_headers.get(key)
+                if val:
+                    self.send_header(key, val)
+            self.send_header("Content-Length", str(len(resp_body)))
+            self.end_headers()
+            self.wfile.write(resp_body)
+        except BrokenPipeError:
+            _log(f"#{global_id} [{job_name}:{call_id}] client disconnected before response was sent")
 
     def do_GET(self):
         if self.path == "/health":
