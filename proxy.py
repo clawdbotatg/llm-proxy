@@ -88,6 +88,9 @@ class ProxyHandler(BaseHTTPRequestHandler):
         body = self.rfile.read(content_length)
 
         job_name = self.headers.get("X-Job-Name", "unknown")
+        iteration = self.headers.get("X-Iteration")
+        phase = self.headers.get("X-Phase")
+        intent = self.headers.get("X-Intent")
 
         try:
             req_json = json.loads(body)
@@ -166,11 +169,20 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
+        meta = {}
+        if iteration is not None:
+            meta["iteration"] = iteration
+        if phase is not None:
+            meta["phase"] = phase
+        if intent is not None:
+            meta["intent"] = intent
+
         call_record = {
             "id": call_id,
             "global_id": global_id,
             "timestamp": now,
             "model": model,
+            **meta,
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
             "cost_usd": round(cost, 6),
@@ -222,6 +234,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 "call_id": call_id,
                 "timestamp": now,
                 "model": model,
+                **meta,
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,
                 "cost_usd": round(cost, 6),
@@ -230,10 +243,12 @@ class ProxyHandler(BaseHTTPRequestHandler):
             with open(os.path.join(LOG_DIR, "all_calls.jsonl"), "a") as f:
                 f.write(json.dumps(global_line) + "\n")
 
+        meta_tag = " ".join(f"{k}={v}" for k, v in meta.items())
         _log(
             f"#{global_id} [{job_name}:{call_id}] {model} "
             f"in={input_tokens} out={output_tokens} "
             f"${cost:.4f} {elapsed:.1f}s -> {status_code}"
+            + (f" ({meta_tag})" if meta_tag else "")
         )
 
         try:

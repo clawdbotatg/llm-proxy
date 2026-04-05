@@ -104,9 +104,9 @@ body { font-family: 'SF Mono','Fira Code',monospace; font-size: 12px; background
 
 /* calls area */
 #calls-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
-.col-header { display: grid; grid-template-columns: 36px 90px 110px 1fr 76px 56px 44px; gap: 8px; padding: 6px 12px; background: #161b22; border-bottom: 1px solid #30363d; color: #7d8590; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; flex-shrink: 0; }
+.col-header { display: grid; grid-template-columns: 36px 90px 110px 1fr minmax(0,160px) 76px 56px 44px; gap: 8px; padding: 6px 12px; background: #161b22; border-bottom: 1px solid #30363d; color: #7d8590; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; flex-shrink: 0; }
 #calls-list { flex: 1; overflow-y: auto; }
-.call-row { display: grid; grid-template-columns: 36px 90px 110px 1fr 76px 56px 44px; gap: 8px; align-items: center; padding: 5px 12px; border-bottom: 1px solid #21262d; cursor: pointer; user-select: none; }
+.call-row { display: grid; grid-template-columns: 36px 90px 110px 1fr minmax(0,160px) 76px 56px 44px; gap: 8px; align-items: center; padding: 5px 12px; border-bottom: 1px solid #21262d; cursor: pointer; user-select: none; }
 .call-row:hover { background: #161b22; }
 .call-row.selected { background: #1c2128; }
 .c-id { color: #7d8590; }
@@ -152,6 +152,11 @@ body { font-family: 'SF Mono','Fira Code',monospace; font-size: 12px; background
 .tc-name { color: #ffa657; font-weight: bold; margin-bottom: 3px; }
 .tc-args { color: #8b949e; white-space: pre-wrap; max-height: 80px; overflow-y: auto; font-size: 11px; }
 .tc-args.open { max-height: none; }
+.tags { display: flex; flex-wrap: wrap; gap: 3px; }
+.tag { font-size: 10px; padding: 1px 5px; border-radius: 3px; white-space: nowrap; }
+.tag-phase { background: #1d3244; color: #79c0ff; }
+.tag-intent { background: #2d1f0e; color: #ffa657; }
+.tag-iter { background: #1e1e2e; color: #d2a8ff; }
 .think { background: #161b22; border-left: 2px solid #7d8590; padding: 5px 8px; margin: 4px 0; color: #7d8590; white-space: pre-wrap; max-height: 80px; overflow-y: auto; font-size: 11px; }
 .think.open { max-height: none; }
 .meta-row { padding: 5px 12px; color: #7d8590; font-size: 11px; border-bottom: 1px solid #21262d; }
@@ -183,7 +188,7 @@ body { font-family: 'SF Mono','Fira Code',monospace; font-size: 12px; background
   <div id="calls-area">
     <div class="col-header">
       <span>#</span><span>Job</span><span>Model</span><span>Tokens in / out</span>
-      <span style="text-align:right">Cost</span><span style="text-align:right">Elapsed</span><span style="text-align:center">Status</span>
+      <span>Tags</span><span style="text-align:right">Cost</span><span style="text-align:right">Elapsed</span><span style="text-align:center">Status</span>
     </div>
     <div id="calls-list"></div>
 
@@ -298,11 +303,17 @@ function renderCalls() {
     const pct = Math.round(c.input_tokens / maxIn * 100);
     const ec = c.elapsed_s < 5 ? '#3fb950' : c.elapsed_s < 15 ? '#e3b341' : '#f85149';
     const sc = (c.status_code === 200 || !c.status_code) ? 'ok' : 'err';
+    const tags = [
+      c.phase  ? `<span class="tag tag-phase">${esc(c.phase)}</span>` : '',
+      c.intent ? `<span class="tag tag-intent">${esc(c.intent)}</span>` : '',
+      c.iteration != null ? `<span class="tag tag-iter">i${esc(c.iteration)}</span>` : '',
+    ].filter(Boolean).join('');
     row.innerHTML = `
       <span class="c-id">#${c.global_id}</span>
       <span class="c-job" title="${esc(c.job_name)}">${esc(c.job_name)}</span>
       <span class="c-model" title="${esc(c.model)}">${esc(c.model)}</span>
       <span class="bar-wrap"><span class="c-in">${fmtM(c.input_tokens)}</span><span style="color:#30363d">/</span><span class="c-out">${fmtM(c.output_tokens)}</span><span class="tbar"><span class="tbar-fill" style="width:${pct}%"></span></span></span>
+      <span class="tags">${tags || '<span style="color:#30363d">—</span>'}</span>
       <span class="c-cost">${fmtC6(c.cost_usd)}</span>
       <span class="c-elapsed" style="color:${ec}">${c.elapsed_s}s</span>
       <span class="c-status ${sc}">${c.status_code || '—'}</span>`;
@@ -314,8 +325,9 @@ function renderCalls() {
 async function openDetail(call) {
   selId = call.global_id;
   renderCalls();
+  const tags = [call.phase, call.intent, call.iteration != null ? `i${call.iteration}` : null].filter(Boolean).join(' · ');
   document.getElementById('detail-title').textContent =
-    `#${call.global_id} · ${call.job_name} · ${call.model} · ${fmtC6(call.cost_usd)} · ${call.elapsed_s}s`;
+    `#${call.global_id} · ${call.job_name} · ${call.model}${tags ? ' · '+tags : ''} · ${fmtC6(call.cost_usd)} · ${call.elapsed_s}s`;
   document.getElementById('detail').classList.remove('hidden');
   document.getElementById('req-body').innerHTML = '<div class="meta-row">Loading…</div>';
   document.getElementById('resp-body').innerHTML = '<div class="meta-row">Loading…</div>';
