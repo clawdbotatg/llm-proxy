@@ -104,9 +104,9 @@ body { font-family: 'SF Mono','Fira Code',monospace; font-size: 12px; background
 
 /* calls area */
 #calls-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
-.col-header { display: grid; grid-template-columns: 36px 90px 110px 1fr minmax(0,160px) 76px 56px 44px; gap: 8px; padding: 6px 12px; background: #161b22; border-bottom: 1px solid #30363d; color: #7d8590; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; flex-shrink: 0; }
+.col-header { display: grid; grid-template-columns: 36px 90px 110px 180px minmax(0,2fr) 76px 56px 44px; gap: 8px; padding: 6px 12px; background: #161b22; border-bottom: 1px solid #30363d; color: #7d8590; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; flex-shrink: 0; }
 #calls-list { flex: 1; overflow-y: auto; }
-.call-row { display: grid; grid-template-columns: 36px 90px 110px 1fr minmax(0,160px) 76px 56px 44px; gap: 8px; align-items: center; padding: 5px 12px; border-bottom: 1px solid #21262d; cursor: pointer; user-select: none; }
+.call-row { display: grid; grid-template-columns: 36px 90px 110px 180px minmax(0,2fr) 76px 56px 44px; gap: 8px; align-items: center; padding: 5px 12px; border-bottom: 1px solid #21262d; cursor: pointer; user-select: none; }
 .call-row:hover { background: #161b22; }
 .call-row.selected { background: #1c2128; }
 .c-id { color: #7d8590; }
@@ -174,6 +174,7 @@ body { font-family: 'SF Mono','Fira Code',monospace; font-size: 12px; background
   <div class="stat"><span class="stat-label">Calls</span><span class="stat-value" id="s-calls" style="color:#e6edf3">—</span></div>
   <div class="stat"><span class="stat-label">Cost</span><span class="stat-value" id="s-cost" style="color:#3fb950">—</span></div>
   <div class="stat"><span class="stat-label">Input Tokens</span><span class="stat-value" id="s-in" style="color:#79c0ff">—</span></div>
+  <div class="stat"><span class="stat-label">Cached</span><span class="stat-value" id="s-cached" style="color:#56d364">—</span></div>
   <div class="stat"><span class="stat-label">Output Tokens</span><span class="stat-value" id="s-out" style="color:#ffa657">—</span></div>
   <div class="stat"><span class="stat-label">Avg Latency</span><span class="stat-value" id="s-lat" style="color:#d2a8ff">—</span></div>
   <div class="stat"><span class="stat-label">Jobs</span><span class="stat-value" id="s-jobs" style="color:#e6edf3">—</span></div>
@@ -259,7 +260,10 @@ function updateStats() {
   const calls = visible();
   document.getElementById('s-calls').textContent = calls.length.toLocaleString();
   document.getElementById('s-cost').textContent = fmtC(calls.reduce((s,c)=>s+c.cost_usd,0));
-  document.getElementById('s-in').textContent = fmtM(calls.reduce((s,c)=>s+c.input_tokens,0));
+  const totalIn = calls.reduce((s,c)=>s+c.input_tokens,0);
+  const totalCached = calls.reduce((s,c)=>s+(c.cached_tokens||0),0);
+  document.getElementById('s-in').textContent = fmtM(totalIn);
+  document.getElementById('s-cached').textContent = totalIn ? fmtM(totalCached) + ' (' + Math.round(totalCached/totalIn*100) + '%)' : '—';
   document.getElementById('s-out').textContent = fmtM(calls.reduce((s,c)=>s+c.output_tokens,0));
   const avg = calls.length ? calls.reduce((s,c)=>s+c.elapsed_s,0)/calls.length : 0;
   document.getElementById('s-lat').textContent = avg.toFixed(1)+'s';
@@ -279,7 +283,8 @@ function renderJobs(data) {
   el.appendChild(allDiv);
 
   [...data].sort((a,b)=>b.total_cost_usd-a.total_cost_usd).forEach(j => {
-    const div = mkJobRow(j.job_name, fmtC(j.total_cost_usd), j.total_calls+' calls · '+fmtM(j.total_input_tokens)+' in', activeJob === j.job_name);
+    const cachePct = j.total_cached_tokens && j.total_input_tokens ? ' · '+Math.round(j.total_cached_tokens/j.total_input_tokens*100)+'% cached' : '';
+    const div = mkJobRow(j.job_name, fmtC(j.total_cost_usd), j.total_calls+' calls · '+fmtM(j.total_input_tokens)+' in'+cachePct, activeJob === j.job_name);
     div.onclick = () => { activeJob = j.job_name; renderJobs(data); render(); };
     el.appendChild(div);
   });
@@ -304,15 +309,15 @@ function renderCalls() {
     const ec = c.elapsed_s < 5 ? '#3fb950' : c.elapsed_s < 15 ? '#e3b341' : '#f85149';
     const sc = (c.status_code === 200 || !c.status_code) ? 'ok' : 'err';
     const tags = [
+      c.iteration != null ? `<span class="tag tag-iter">i${esc(c.iteration)}</span>` : '',
       c.phase  ? `<span class="tag tag-phase">${esc(c.phase)}</span>` : '',
       c.intent ? `<span class="tag tag-intent">${esc(c.intent)}</span>` : '',
-      c.iteration != null ? `<span class="tag tag-iter">i${esc(c.iteration)}</span>` : '',
     ].filter(Boolean).join('');
     row.innerHTML = `
       <span class="c-id">#${c.global_id}</span>
       <span class="c-job" title="${esc(c.job_name)}">${esc(c.job_name)}</span>
       <span class="c-model" title="${esc(c.model)}">${esc(c.model)}</span>
-      <span class="bar-wrap"><span class="c-in">${fmtM(c.input_tokens)}</span><span style="color:#30363d">/</span><span class="c-out">${fmtM(c.output_tokens)}</span><span class="tbar"><span class="tbar-fill" style="width:${pct}%"></span></span></span>
+      <span class="bar-wrap"><span class="c-in">${fmtM(c.input_tokens)}${c.cached_tokens ? '<span style="color:#56d364;font-size:10px" title="'+c.cached_tokens+' cached"> ('+Math.round(c.cached_tokens/c.input_tokens*100)+'%c)</span>':''}</span><span style="color:#30363d">/</span><span class="c-out">${fmtM(c.output_tokens)}</span><span class="tbar"><span class="tbar-fill" style="width:${pct}%"></span></span></span>
       <span class="tags">${tags || '<span style="color:#30363d">—</span>'}</span>
       <span class="c-cost">${fmtC6(c.cost_usd)}</span>
       <span class="c-elapsed" style="color:${ec}">${c.elapsed_s}s</span>

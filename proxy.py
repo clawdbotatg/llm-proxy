@@ -30,23 +30,35 @@ UPSTREAM_URL = os.environ.get("UPSTREAM_URL", "https://llm.bankr.bot/v1")
 PROXY_PORT = int(os.environ.get("PROXY_PORT", "8800"))
 LOG_DIR = os.environ.get("PROXY_LOG_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "proxy_logs"))
 
+# (input $/1M, output $/1M, cached_input $/1M)
+# Cached input prices: Anthropic = 10% of input, OpenAI/MiniMax = free
 PRICING = {
-    "claude-opus-4.6": (15.0, 75.0),
-    "claude-opus-4-20250514": (15.0, 75.0),
-    "claude-sonnet-4.6": (3.0, 15.0),
-    "claude-sonnet-4-20250514": (3.0, 15.0),
-    "claude-haiku-3.5": (0.80, 4.0),
-    "gpt-4o": (2.50, 10.0),
-    "gpt-4o-mini": (0.15, 0.60),
-    "minimax-m2.7": (0.50, 1.50),
+    "claude-opus-4.6": (15.0, 75.0, 1.50),
+    "claude-opus-4-20250514": (15.0, 75.0, 1.50),
+    "claude-sonnet-4.6": (3.0, 15.0, 0.30),
+    "claude-sonnet-4-20250514": (3.0, 15.0, 0.30),
+    "claude-haiku-3.5": (0.80, 4.0, 0.08),
+    "gpt-4o": (2.50, 10.0, 0.0),
+    "gpt-4o-mini": (0.15, 0.60, 0.0),
+    "minimax-m2.7": (0.50, 1.50, 0.0),
 }
+
+# Global multiplier to match your provider's actual rates.
+# E.g. set to 0.5 if using batch/wholesale pricing through a provider like Bankr.
+PRICING_MULTIPLIER = float(os.environ.get("PRICING_MULTIPLIER", "1.0"))
 
 _lock = threading.Lock()
 
 
-def _estimate_cost(model, input_tokens, output_tokens):
-    prices = PRICING.get(model, (5.0, 15.0))
-    return (input_tokens / 1_000_000 * prices[0]) + (output_tokens / 1_000_000 * prices[1])
+def _estimate_cost(model, input_tokens, output_tokens, cached_tokens=0):
+    prices = PRICING.get(model, (5.0, 15.0, 0.50))
+    fresh_input = max(input_tokens - cached_tokens, 0)
+    cost = (
+        (fresh_input / 1_000_000 * prices[0])
+        + (cached_tokens / 1_000_000 * prices[2])
+        + (output_tokens / 1_000_000 * prices[1])
+    )
+    return cost * PRICING_MULTIPLIER
 
 
 def _read_counter(path):
@@ -165,7 +177,14 @@ class ProxyHandler(BaseHTTPRequestHandler):
         usage = resp_json.get("usage", {})
         input_tokens = usage.get("prompt_tokens") or usage.get("input_tokens") or 0
         output_tokens = usage.get("completion_tokens") or usage.get("output_tokens") or 0
-        cost = _estimate_cost(model, input_tokens, output_tokens)
+        # Cached tokens: OpenAI format (prompt_tokens_details.cached_tokens)
+        # or Anthropic format (cache_read_tokens)
+        cached_tokens = (
+            (usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0)
+            or usage.get("cache_read_tokens", 0)
+            or 0
+        )
+        cost = _estimate_cost(model, input_tokens, output_tokens, cached_tokens)
 
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -185,6 +204,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             **meta,
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
+            "cached_tokens": cached_tokens,
             "cost_usd": round(cost, 6),
             "elapsed_s": round(elapsed, 2),
             "status_code": status_code,
@@ -201,6 +221,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     "total_calls": 0,
                     "total_input_tokens": 0,
                     "total_output_tokens": 0,
+                    "total_cached_tokens": 0,
                     "total_cost_usd": 0.0,
                     "models_used": {},
                     "calls": [],
@@ -210,6 +231,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             manifest["total_calls"] += 1
             manifest["total_input_tokens"] += input_tokens
             manifest["total_output_tokens"] += output_tokens
+            manifest["total_cached_tokens"] = manifest.get("total_cached_tokens", 0) + cached_tokens
             manifest["total_cost_usd"] = round(manifest["total_cost_usd"] + cost, 6)
 
             if model not in manifest["models_used"]:
@@ -217,12 +239,14 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     "calls": 0,
                     "input_tokens": 0,
                     "output_tokens": 0,
+                    "cached_tokens": 0,
                     "cost_usd": 0.0,
                 }
             m = manifest["models_used"][model]
             m["calls"] += 1
             m["input_tokens"] += input_tokens
             m["output_tokens"] += output_tokens
+            m["cached_tokens"] = m.get("cached_tokens", 0) + cached_tokens
             m["cost_usd"] = round(m["cost_usd"] + cost, 6)
 
             manifest["calls"].append(call_record)
@@ -237,6 +261,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 **meta,
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,
+                "cached_tokens": cached_tokens,
                 "cost_usd": round(cost, 6),
                 "elapsed_s": round(elapsed, 2),
             }
@@ -244,9 +269,10 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 f.write(json.dumps(global_line) + "\n")
 
         meta_tag = " ".join(f"{k}={v}" for k, v in meta.items())
+        cache_tag = f" cached={cached_tokens}" if cached_tokens else ""
         _log(
             f"#{global_id} [{job_name}:{call_id}] {model} "
-            f"in={input_tokens} out={output_tokens} "
+            f"in={input_tokens}{cache_tag} out={output_tokens} "
             f"${cost:.4f} {elapsed:.1f}s -> {status_code}"
             + (f" ({meta_tag})" if meta_tag else "")
         )
