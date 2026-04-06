@@ -284,7 +284,14 @@ function renderJobs(data) {
 
   [...data].sort((a,b)=>b.total_cost_usd-a.total_cost_usd).forEach(j => {
     const cachePct = j.total_cached_tokens && j.total_input_tokens ? ' · '+Math.round(j.total_cached_tokens/j.total_input_tokens*100)+'% cached' : '';
-    const div = mkJobRow(j.job_name, fmtC(j.total_cost_usd), j.total_calls+' calls · '+fmtM(j.total_input_tokens)+' in'+cachePct, activeJob === j.job_name);
+    const f = j.flags || {};
+    const warnings = [];
+    if (f.expensive_low_output) warnings.push(f.expensive_low_output+' expensive/low-out');
+    if (f.zero_output_calls) warnings.push(f.zero_output_calls+' empty');
+    if (f.error_calls) warnings.push(f.error_calls+' errors');
+    if (f.uncached_claude_input_tokens > 50000) warnings.push(fmtM(f.uncached_claude_input_tokens)+' uncached Claude');
+    const warnStr = warnings.length ? ' · <span style="color:#f85149">'+warnings.join(', ')+'</span>' : '';
+    const div = mkJobRow(j.job_name, fmtC(j.total_cost_usd), j.total_calls+' calls · '+fmtM(j.total_input_tokens)+' in'+cachePct+warnStr, activeJob === j.job_name);
     div.onclick = () => { activeJob = j.job_name; renderJobs(data); render(); };
     el.appendChild(div);
   });

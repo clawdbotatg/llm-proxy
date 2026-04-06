@@ -18,6 +18,7 @@ Config (env vars):
 
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -48,6 +49,20 @@ PRICING = {
 PRICING_MULTIPLIER = float(os.environ.get("PRICING_MULTIPLIER", "1.0"))
 
 _lock = threading.Lock()
+
+_SECRET_PATTERNS = [
+    (re.compile(r'0x[0-9a-fA-F]{40,}'), '0x[REDACTED]'),
+    (re.compile(r'(?i)(private.?key|secret|api.?key|password|mnemonic)\s*[:=]\s*\S+'), r'\1=[REDACTED]'),
+]
+
+
+def _scrub_secrets(text):
+    """Strip private keys and secrets from log metadata."""
+    if not text:
+        return text
+    for pattern, replacement in _SECRET_PATTERNS:
+        text = pattern.sub(replacement, text)
+    return text
 
 
 def _estimate_cost(model, input_tokens, output_tokens, cached_tokens=0):
@@ -102,7 +117,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
         job_name = self.headers.get("X-Job-Name", "unknown")
         iteration = self.headers.get("X-Iteration")
         phase = self.headers.get("X-Phase")
-        intent = self.headers.get("X-Intent")
+        intent = _scrub_secrets(self.headers.get("X-Intent"))
 
         try:
             req_json = json.loads(body)
@@ -250,6 +265,23 @@ class ProxyHandler(BaseHTTPRequestHandler):
             m["cost_usd"] = round(m["cost_usd"] + cost, 6)
 
             manifest["calls"].append(call_record)
+
+            # Track waste indicators for the viewer
+            flags = manifest.setdefault("flags", {
+                "zero_output_calls": 0,
+                "error_calls": 0,
+                "expensive_low_output": 0,
+                "uncached_claude_input_tokens": 0,
+            })
+            if input_tokens == 0 and output_tokens == 0:
+                flags["zero_output_calls"] += 1
+            if status_code and status_code >= 400:
+                flags["error_calls"] += 1
+            if cost > 0.10 and output_tokens < 200:
+                flags["expensive_low_output"] += 1
+            if model.startswith("claude") and cached_tokens == 0 and input_tokens > 0:
+                flags["uncached_claude_input_tokens"] += input_tokens
+
             _save_manifest(manifest_path, manifest)
 
             global_line = {
@@ -284,6 +316,18 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 if val:
                     self.send_header(key, val)
             self.send_header("Content-Length", str(len(resp_body)))
+
+            job_total_cost = manifest["total_cost_usd"]
+            self.send_header("X-Job-Cost", f"{job_total_cost:.4f}")
+            self.send_header("X-Call-Cost", f"{cost:.6f}")
+            if job_total_cost > 8.0:
+                self.send_header("X-Job-Cost-Warning", "CRITICAL: job cost exceeds $8")
+                _log(f"#{global_id} [{job_name}] COST CRITICAL: ${job_total_cost:.2f}")
+            elif job_total_cost > 4.0:
+                self.send_header("X-Job-Cost-Warning", "HIGH: job cost exceeds $4")
+            elif job_total_cost > 2.0:
+                self.send_header("X-Job-Cost-Warning", "ELEVATED: job cost exceeds $2")
+
             self.end_headers()
             self.wfile.write(resp_body)
         except BrokenPipeError:
